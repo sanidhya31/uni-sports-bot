@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.idea/
+.venv/
+venv/
+.uv-cache/
+.uv-python/
+__pycache__/
+*.pyc
+screenshots/
+user_data/
+app/screenshots/
+app/user_data/
+app/__pycache__/
