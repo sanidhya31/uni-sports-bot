@@ -199,8 +199,6 @@ Docker Compose mounts:
 
 ```text
 ./config      -> runtime Telegram-controlled config
-./user_data   -> Playwright browser session
-./screenshots -> debug screenshots
 ```
 
 For a VPS, set:
@@ -215,7 +213,7 @@ The container uses `restart: unless-stopped`, so it comes back after reboots unl
 
 - Keep `DRY_RUN=true` while testing.
 - Use `/check` before `/dryrun off`.
-- Do not commit `.env`, `config.json`, screenshots, or browser session data.
+- Do not commit `.env` or `config.json`.
 - If you accidentally paste your Telegram token somewhere public, rotate it in BotFather.
 - This bot automates your own portal session. Use it responsibly and do not hammer the service.
 

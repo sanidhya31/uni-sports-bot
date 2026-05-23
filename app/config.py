@@ -53,8 +53,6 @@ class Config:
     telegram_allowed_user_id: int
     notify_email: str
 
-    user_data_dir: Path
-    screenshot_dir: Path
     runtime_config_path: Path
 
     @classmethod
@@ -149,10 +147,6 @@ class Config:
                 "NOTIFY_EMAIL",
                 ""
             ),
-
-            user_data_dir=_project_path("USER_DATA_DIR", "user_data"),
-
-            screenshot_dir=_project_path("SCREENSHOT_DIR", "screenshots"),
 
             runtime_config_path=_project_path("RUNTIME_CONFIG_PATH", "config.json"),
         )

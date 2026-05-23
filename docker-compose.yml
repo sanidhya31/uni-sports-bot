@@ -7,9 +7,5 @@ services:
     environment:
       HEADLESS: "true"
       RUNTIME_CONFIG_PATH: /app/config/config.json
-      USER_DATA_DIR: /app/user_data
-      SCREENSHOT_DIR: /app/screenshots
     volumes:
       - ./config:/app/config
-      - ./user_data:/app/user_data
-      - ./screenshots:/app/screenshots

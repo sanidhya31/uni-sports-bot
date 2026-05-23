@@ -31,8 +31,6 @@ async def run() -> None:
     setup_logging()
     cfg = Config.load()
 
-    cfg.screenshot_dir.mkdir(exist_ok=True)
-    cfg.user_data_dir.mkdir(exist_ok=True)
     runtime = RuntimeConfig.load(cfg.runtime_config_path, cfg)
     runtime.apply_to(cfg)
     notifier = Notifier(
@@ -45,10 +43,8 @@ async def run() -> None:
     log.info("Starting bot. dry_run=%s target=%s", cfg.dry_run, cfg.target_url)
 
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(cfg.user_data_dir),
-            headless=cfg.headless,
-        )
+        browser = await p.chromium.launch(headless=cfg.headless)
+        context = await browser.new_context()
         site = SportsSite(cfg, context)
         await site.open()
         site_lock = asyncio.Lock()
@@ -110,8 +106,6 @@ async def run() -> None:
                 except Exception as exc:
                     consecutive_errors += 1
                     log.exception("Polling error %s/%s: %s", consecutive_errors, cfg.max_consecutive_errors, exc)
-                    async with site_lock:
-                        await site.screenshot("error")
 
                     if consecutive_errors >= cfg.max_consecutive_errors:
                         notifier.send("Sports bot paused", f"Too many consecutive errors: {exc}")
@@ -129,6 +123,10 @@ async def run() -> None:
                 pass
             try:
                 await context.close()
+            except Exception as exc:
+                log.warning("Browser context was already closed: %s", exc)
+            try:
+                await browser.close()
             except Exception as exc:
                 log.warning("Browser was already closed: %s", exc)
 

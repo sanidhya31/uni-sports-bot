@@ -5,10 +5,9 @@ import re
 import asyncio
 import time
 import unicodedata
-from datetime import datetime
 from typing import Any
 
-from playwright.async_api import BrowserContext, Error as PlaywrightError, Locator, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import BrowserContext, Locator, Page, TimeoutError as PlaywrightTimeoutError
 
 from app.config import Config
 
@@ -107,7 +106,6 @@ class SportsSite:
         await page.wait_for_load_state("networkidle")
 
         if not await self._looks_logged_in():
-            await self.screenshot("login-check-failed")
             log.warning("Login submitted, but login status is not confirmed yet.")
         else:
             log.info("Login confirmed.")
@@ -133,7 +131,6 @@ class SportsSite:
                 )
             else:
                 log.info("Slot not available yet. Target card was not found.")
-            await self.screenshot("slot-not-found")
             return False
 
         form_payload = await self._extract_booking_payload(booking_form)
@@ -142,7 +139,6 @@ class SportsSite:
             form_payload.get("action", BOOKING_ACTION),
             form_payload.get("fields", {}),
         )
-        await self.screenshot("slot-found")
 
         if self.cfg.dry_run:
             log.info("DRY_RUN=true, so no booking submit was performed.")
@@ -151,7 +147,6 @@ class SportsSite:
         submitted = await self._submit_booking_form(booking_form)
         if not submitted:
             log.error("Booking failed: could not submit the detected form.")
-            await self.screenshot("booking-submit-failed")
             return False
 
         confirm = await self._find_confirm_control()
@@ -160,7 +155,6 @@ class SportsSite:
             await confirm.click()
             await page.wait_for_load_state("networkidle")
 
-        await self.screenshot("booking-submitted")
         booking_result = await self._booking_result()
         if booking_result is True:
             log.info("Booking successful.")
@@ -260,16 +254,6 @@ class SportsSite:
             if value:
                 return value
         return None
-
-    async def screenshot(self, label: str) -> None:
-        page = self._page()
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = self.cfg.screenshot_dir / f"{timestamp}-{label}.png"
-        try:
-            await page.screenshot(path=str(path), full_page=True)
-            log.info("Screenshot saved: %s", path)
-        except PlaywrightError as exc:
-            log.warning("Could not save screenshot %s: %s", label, exc)
 
     async def _looks_logged_in(self) -> bool:
         page = self._page()
@@ -513,7 +497,6 @@ class SportsSite:
                 return True
             raise PlaywrightTimeoutError(f"Target text {self.cfg.sport!r} was not visible.")
         except PlaywrightTimeoutError:
-            await self.screenshot("target-page-not-ready")
             log.warning(
                 "Target page did not show %r. current_url=%s title=%r",
                 self.cfg.sport,
