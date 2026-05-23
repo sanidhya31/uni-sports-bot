@@ -30,6 +30,7 @@ class Config:
     time_slot: str
 
     dry_run: bool
+    headless: bool
 
     poll_interval_seconds: int
     poll_jitter_seconds: int
@@ -48,10 +49,13 @@ class Config:
 
     telegram_token: str
     telegram_chat_id: str
+    telegram_bot_token: str
+    telegram_allowed_user_id: int
     notify_email: str
 
     user_data_dir: Path
     screenshot_dir: Path
+    runtime_config_path: Path
 
     @classmethod
     def load(cls) -> "Config":
@@ -66,6 +70,7 @@ class Config:
             time_slot=os.getenv("TIME_SLOT", ""),
 
             dry_run=os.getenv("DRY_RUN", "true").lower() == "true",
+            headless=os.getenv("HEADLESS", "false").lower() == "true",
 
             poll_interval_seconds=int(
                 os.getenv("POLL_INTERVAL_SECONDS", "30")
@@ -102,7 +107,7 @@ class Config:
                 x.strip()
                 for x in os.getenv(
                     "BOOK_BUTTON_TEXTS",
-                    ""
+                    "Buchen,Anmelden,Book,Register"
                 ).split(",")
                 if x.strip()
             ],
@@ -111,7 +116,7 @@ class Config:
                 x.strip()
                 for x in os.getenv(
                     "CONFIRM_BUTTON_TEXTS",
-                    ""
+                    "Bestaetigen,Best,Confirm,Yes"
                 ).split(",")
                 if x.strip()
             ],
@@ -131,6 +136,15 @@ class Config:
                 ""
             ),
 
+            telegram_bot_token=os.getenv(
+                "TELEGRAM_BOT_TOKEN",
+                ""
+            ),
+
+            telegram_allowed_user_id=int(
+                os.getenv("TELEGRAM_ALLOWED_USER_ID", "0") or "0"
+            ),
+
             notify_email=os.getenv(
                 "NOTIFY_EMAIL",
                 ""
@@ -139,4 +153,6 @@ class Config:
             user_data_dir=_project_path("USER_DATA_DIR", "user_data"),
 
             screenshot_dir=_project_path("SCREENSHOT_DIR", "screenshots"),
+
+            runtime_config_path=_project_path("RUNTIME_CONFIG_PATH", "config.json"),
         )

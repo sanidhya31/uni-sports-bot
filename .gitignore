@@ -1,15 +1,33 @@
+# Secrets and local runtime config
 .env
 .env.*
 !.env.example
+config.json
+config.json.tmp
+config/
+
+# IDEs and local environments
 .idea/
 .venv/
 venv/
 .uv-cache/
 .uv-python/
+.pytest_cache/
+
+# Python/cache output
 __pycache__/
 *.pyc
+
+# Runtime/browser data
 screenshots/
 user_data/
 app/screenshots/
 app/user_data/
 app/__pycache__/
+**/screenshots/
+**/user_data/
+playwright-report/
+test-results/
+*.har
+*.trace.zip
+*.log

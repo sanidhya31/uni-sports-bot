@@ -1,0 +1,14 @@
+.git
+.idea
+.uv-cache
+.uv-python
+venv
+__pycache__
+*.pyc
+.env
+.env.*
+!*.env.example
+config
+config.json
+screenshots
+user_data
