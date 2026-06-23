@@ -29,8 +29,7 @@ log = logging.getLogger(__name__)
 Notify = Callable[[int, str], Awaitable[None]]
 NotifyAdmin = Callable[[str], Awaitable[None]]
 
-RECONCILE_INTERVAL = 5.0      # seconds between active-user scans
-BLOCKED_POLL_SECONDS = 60.0   # slow poll while a slot is 24h-rule blocked
+RECONCILE_INTERVAL = 5.0  # seconds between active-user scans
 
 
 async def _noop() -> None:
@@ -62,8 +61,6 @@ class UserRunner:
         self._notify_admin = notify_admin or (lambda _msg: _noop())
         self._portal: PortalClient | None = None
         self._standby_notified = False
-        self._blocked_notified = False
-        self._blocked = False  # currently 24h-rule blocked -> back off polling
 
     @property
     def uid(self) -> int:
@@ -82,6 +79,9 @@ class UserRunner:
                 await self._sleep()
         except _Booked:
             log.info("Runner %s finished: booked.", self.uid)
+            return
+        except _Stopped:
+            log.info("Runner %s stopped: portal refused.", self.uid)
             return
         except asyncio.CancelledError:
             raise
@@ -111,7 +111,6 @@ class UserRunner:
         if slot is None:
             log.debug("Runner %s: target not in schedule yet.", self.uid)
             self._standby_notified = False
-            self._blocked = False
             return
 
         if slot.availability == Availability.BOOKED:
@@ -127,7 +126,6 @@ class UserRunner:
 
         if slot.availability != Availability.OPEN:
             self._standby_notified = False
-            self._blocked = False
             return
 
         # Slot is OPEN. Coordinate with other users wanting the SAME slot so we
@@ -177,28 +175,24 @@ class UserRunner:
             raise _Booked()
 
         if result.permanent:
-            # The portal refused for a reason that won't clear by retrying right now.
-            # Keep watching (slower); the window may open or the user may cancel.
-            self._blocked = True
-            if not self._blocked_notified:
-                self._blocked_notified = True
-                line = f"{slot.course} {slot.day} {slot.time_range}"
-                reason = (await to_english(result.message)) or "the portal refused the booking."
-                await self._notify(
-                    self.uid,
-                    f"⚠️ Couldn't book {line}.\nReason: {reason}\n\n"
-                    f"I'll keep checking and grab it the moment the portal allows. /mystop to stop.",
-                )
-                who = self.user.display_name or self.user.uni_username or str(self.uid)
-                await self._notify_admin(f"⚠️ {who} (id {self.uid}) couldn't book {line}.\nReason: {reason}")
-            return  # keep watching, do NOT stop
-        self._blocked = False
+            # The portal refused for a standing reason (e.g. its 24h rule). Retrying
+            # won't help, so stop the run and tell the user why.
+            await self._db(self.store.set_enabled, self.uid, False)
+            line = f"{slot.course} {slot.day} {slot.time_range}"
+            reason = (await to_english(result.message)) or "the portal refused the booking."
+            await self._notify(
+                self.uid,
+                f"⚠️ Couldn't book {line}.\nReason: {reason}\n\n"
+                f"Stopping your run now. /mystart again once it's bookable.",
+            )
+            who = self.user.display_name or self.user.uni_username or str(self.uid)
+            await self._notify_admin(
+                f"⚠️ {who} (id {self.uid}) couldn't book {line} - run stopped.\nReason: {reason}"
+            )
+            raise _Stopped()
         log.info("Runner %s booking not confirmed (will retry): %s", self.uid, result.detail)
 
     async def _sleep(self) -> None:
-        if self._blocked:
-            await asyncio.sleep(BLOCKED_POLL_SECONDS)
-            return
         base = max(1, self.settings.poll_interval_seconds)
         jitter = random.uniform(0, max(0, self.settings.poll_jitter_seconds))
         await asyncio.sleep(base + jitter)
@@ -206,6 +200,10 @@ class UserRunner:
 
 class _Booked(Exception):
     """Internal signal: booking succeeded, stop this runner cleanly."""
+
+
+class _Stopped(Exception):
+    """Internal signal: stop this runner (portal refused for a standing reason)."""
 
 
 class Engine:
