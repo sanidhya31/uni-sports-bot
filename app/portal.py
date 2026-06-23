@@ -228,7 +228,8 @@ def _find_idkunde(html: str) -> str | None:
 # e.g. the portal's 24-hour advance rule. Kept specific so they don't match the
 # unrelated ``sperre24`` hidden field that appears on every form.
 PERMANENT_MARKERS = (
-    "innerhalb von 24", "24 stunden", "bereits gebucht", "schon gebucht",
+    "innerhalb von 24", "24 stunden", "stunden vor dessen start",
+    "kannst du diesen kurs erst", "bereits gebucht", "schon gebucht",
     "bereits angemeldet",
 )
 
@@ -249,10 +250,19 @@ def _parse_confirm_form(html: str) -> tuple[str, dict[str, str]] | None:
 
 
 def _failure_hint(html: str) -> tuple[bool, str]:
-    """Return (permanent, short_message) for a booking that didn't confirm."""
+    """Return (permanent, short_message) for a booking that didn't confirm.
+
+    The portal puts the real reason in a hidden ``<input name="fehler"
+    value="...">``, so we read that field first; stripping tags would discard it.
+    """
+    import html as html_mod
     import re
 
-    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+    m = re.search(r'name=["\']fehler["\']\s+value=["\']([^"\']+)["\']', html)
+    if m:
+        text = html_mod.unescape(m.group(1)).strip()
+    else:
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
     low = text.lower()
-    permanent = any(m in low for m in PERMANENT_MARKERS)
-    return permanent, text[:200]
+    permanent = any(marker in low for marker in PERMANENT_MARKERS)
+    return permanent, text[:300]

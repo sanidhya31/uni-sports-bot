@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 Notify = Callable[[int, str], Awaitable[None]]
 NotifyAdmin = Callable[[str], Awaitable[None]]
 
-RECONCILE_INTERVAL = 5.0  # seconds between active-user scans
+RECONCILE_INTERVAL = 5.0      # seconds between active-user scans
+BLOCKED_POLL_SECONDS = 60.0   # slow poll while a slot is 24h-rule blocked
 
 
 async def _noop() -> None:
@@ -61,6 +62,7 @@ class UserRunner:
         self._portal: PortalClient | None = None
         self._standby_notified = False
         self._blocked_notified = False
+        self._blocked = False  # currently 24h-rule blocked -> back off polling
 
     @property
     def uid(self) -> int:
@@ -108,6 +110,7 @@ class UserRunner:
         if slot is None:
             log.debug("Runner %s: target not in schedule yet.", self.uid)
             self._standby_notified = False
+            self._blocked = False
             return
 
         if slot.availability == Availability.BOOKED:
@@ -123,6 +126,7 @@ class UserRunner:
 
         if slot.availability != Availability.OPEN:
             self._standby_notified = False
+            self._blocked = False
             return
 
         # Slot is OPEN. Coordinate with other users wanting the SAME slot so we
@@ -173,7 +177,8 @@ class UserRunner:
 
         if result.permanent:
             # The 24h rule (or already-booked). Retrying won't help *right now*, but
-            # we keep watching in case the user cancels the conflicting booking.
+            # we keep watching (slower) in case the window opens or the user cancels.
+            self._blocked = True
             if not self._blocked_notified:
                 self._blocked_notified = True
                 portal_msg = f"\nPortal's exact words: “{result.message}”" if result.message else ""
@@ -186,9 +191,13 @@ class UserRunner:
                     f"Or /mystop if you've made your peace.",
                 )
             return  # keep watching, do NOT stop
+        self._blocked = False
         log.info("Runner %s booking not confirmed (will retry): %s", self.uid, result.detail)
 
     async def _sleep(self) -> None:
+        if self._blocked:
+            await asyncio.sleep(BLOCKED_POLL_SECONDS)
+            return
         base = max(1, self.settings.poll_interval_seconds)
         jitter = random.uniform(0, max(0, self.settings.poll_jitter_seconds))
         await asyncio.sleep(base + jitter)
