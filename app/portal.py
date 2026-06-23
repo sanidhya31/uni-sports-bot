@@ -166,6 +166,34 @@ class PortalClient:
             permanent=permanent, message=message,
         )
 
+    async def cancel(self, slot: Slot) -> BookingResult:
+        """Cancel a BOOKED slot via its storno form (same two-step pattern).
+
+        Success is confirmed by re-reading the schedule (the slot is no longer
+        BOOKED for this account).
+        """
+        if not slot.form_action:
+            return BookingResult(ok=False, detail="Slot has no storno form.")
+        payload = dict(slot.fields)
+        if slot.submit_name:
+            payload[slot.submit_name] = slot.submit_value
+
+        resp = await self._client.post(f"/{slot.form_action}", data=payload)
+        final_text = resp.text
+        confirm = _parse_confirm_form(resp.text)
+        if confirm is not None:
+            action, fields = confirm
+            resp2 = await self._client.post(action, data=fields)
+            final_text = resp2.text
+
+        if not await self._slot_now_booked(slot):
+            log.info("Cancel confirmed: %s %s %s.", slot.course, slot.day, slot.start)
+            return BookingResult(ok=True, detail="canceled", status_code=resp.status_code)
+
+        _, message = _failure_hint(final_text)
+        log.info("Cancel not confirmed: %s", message[:120])
+        return BookingResult(ok=False, detail="cancel not confirmed", message=message)
+
     async def _slot_now_booked(self, slot: Slot) -> bool:
         """Re-read the schedule; True if this exact slot is now BOOKED for us."""
         try:

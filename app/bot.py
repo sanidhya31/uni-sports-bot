@@ -30,6 +30,7 @@ USER_COMMANDS = [
     {"command": "mytarget", "description": "Set target manually: /mytarget Badminton Donnerstag 14:00"},
     {"command": "mystart", "description": "Start auto-booking your target"},
     {"command": "mystop", "description": "Stop auto-booking"},
+    {"command": "mybookings", "description": "Show your bookings and cancel any"},
     {"command": "mystatus", "description": "Show your approval status and target"},
     {"command": "help", "description": "Show available commands"},
 ]
@@ -93,6 +94,9 @@ class BotApp:
         # Per-user cache of the last fetched slot list, so callbacks can reference
         # a slot by index without re-scraping.
         self._slot_cache: dict[int, list[Slot]] = {}
+        self._booking_cache: dict[int, list[Slot]] = {}
+        # Users mid-registration whose name we're waiting on: uid -> {username, uni_email}.
+        self._awaiting_name: dict[int, dict[str, str]] = {}
 
     # -- lifecycle ----------------------------------------------------------
     async def run(self) -> None:
@@ -156,6 +160,14 @@ class BotApp:
         if chat_id is None or user_id is None:
             return
 
+        # Mid-registration name capture.
+        if user_id in self._awaiting_name:
+            if not text.startswith("/"):
+                await self._finish_registration(chat_id, user_id, name=text.strip()[:80])
+                return
+            # They sent a command instead; finish with a fallback name, then continue.
+            await self._finish_registration(chat_id, user_id, name=None)
+
         command = text.split()[0].split("@", 1)[0].lower()
         args = text.split()[1:]
 
@@ -171,6 +183,8 @@ class BotApp:
             await self._handle_mytarget(chat_id, user_id, args)
         elif command in {"/mystart", "/mystop"}:
             await self._handle_toggle(chat_id, user_id, enable=command == "/mystart")
+        elif command == "/mybookings":
+            await self._handle_mybookings(chat_id, user_id)
         else:
             await self.user_api.send_message(chat_id, "🤨 No idea what that was. /help, my friend.")
 
@@ -216,12 +230,79 @@ class BotApp:
             chat_id, "Pick your day of suffering:", reply_markup={"inline_keyboard": buttons}
         )
 
+    async def _handle_mybookings(self, chat_id: int, user_id: int) -> None:
+        u = await self._require_approved(chat_id, user_id)
+        if u is None:
+            return
+        await self.user_api.send_message(chat_id, "📋 Checking what you've got booked...")
+        try:
+            slots = await self._fetch_user_slots(u)
+        except Exception as exc:  # noqa: BLE001
+            await self.user_api.send_message(chat_id, f"😵 Couldn't load your bookings: {exc}")
+            return
+        booked = [s for s in slots if s.availability == Availability.BOOKED]
+        self._booking_cache[user_id] = booked
+        if not booked:
+            await self.user_api.send_message(chat_id, "You've got nothing booked right now. Living dangerously. 🤙")
+            return
+        buttons = [
+            [{"text": f"❌ Cancel {s.course[:24]} {s.day[:2]} {s.start}", "callback_data": f"xcancel:{i}"}]
+            for i, s in enumerate(booked)
+        ]
+        await self.user_api.send_message(
+            chat_id, "Your bookings (tap to cancel, no take-backs):",
+            reply_markup={"inline_keyboard": buttons},
+        )
+
+    async def _cancel_booking(self, cb: dict[str, Any], user_id: int, chat_id: int, idx: int) -> None:
+        slots = self._booking_cache.get(user_id, [])
+        if idx >= len(slots):
+            await self.user_api.answer_callback(cb["id"], "Expired; run /mybookings again.")
+            return
+        want = slots[idx]
+        await self.user_api.answer_callback(cb["id"], "Canceling...")
+        u = await self._db(self.store.get_user, user_id)
+        password = await self._db(self.store.get_password, user_id)
+        if u is None or not password:
+            await self.user_api.send_message(chat_id, "Couldn't find your account; re-/register.")
+            return
+        try:
+            async with PortalClient(u.uni_username, password, base_url=self.settings.portal_base_url) as portal:
+                await portal.login()
+                fresh = next(
+                    (s for s in await portal.list_slots()
+                     if s.course == want.course and s.day == want.day and s.start == want.start
+                     and s.availability == Availability.BOOKED),
+                    None,
+                )
+                if fresh is None:
+                    await self.user_api.send_message(chat_id, "That one isn't showing as booked anymore. Nothing to cancel.")
+                    return
+                result = await portal.cancel(fresh)
+        except Exception as exc:  # noqa: BLE001
+            await self.user_api.send_message(chat_id, f"😵 Cancel hit an error: {exc}")
+            return
+        if result.ok:
+            await self.user_api.send_message(
+                chat_id, f"🗑️ Canceled {want.course} {want.day} {want.time_range}. Freedom.",
+            )
+        else:
+            await self.user_api.send_message(
+                chat_id, f"😕 Couldn't cancel that. Portal said: {result.message or 'no idea, try again'}",
+            )
+
     async def _on_user_callback(self, cb: dict[str, Any]) -> None:
         user_id = (cb.get("from") or {}).get("id")
         message = cb.get("message") or {}
         chat_id = (message.get("chat") or {}).get("id")
         data = cb.get("data") or ""
         action, _, value = data.partition(":")
+
+        if action == "xcancel":
+            if value.isdigit():
+                await self._cancel_booking(cb, user_id, chat_id, int(value))
+            return
+
         slots = self._slot_cache.get(user_id, [])
 
         if action == "day":
@@ -333,11 +414,28 @@ class BotApp:
             return
 
         await self._db(self.store.register_pending, user_id, username, display_name, uni_email, uni_password)
+        # Ask for a name before pinging the admin, so they see who it is.
+        self._awaiting_name[user_id] = {"username": username, "uni_email": uni_email}
         await self.user_api.send_message(
-            chat_id,
-            "✅ Creds check out. Request's with the admin now, you'll get a ping the moment you're in.",
+            chat_id, "✅ Creds check out. One last thing, what should I call you? (just type your name)",
         )
-        await self._notify_admin_pending(user_id, username, display_name, uni_email)
+
+    async def _finish_registration(self, chat_id: int, user_id: int, name: str | None) -> None:
+        ctx = self._awaiting_name.pop(user_id, None)
+        if ctx is None:
+            return
+        if name:
+            await self._db(self.store.update_display_name, user_id, name)
+        u = await self._db(self.store.get_user, user_id)
+        final_name = name or (u.display_name if u else "") or ctx.get("username") or "someone"
+        if name:
+            await self.user_api.send_message(
+                chat_id,
+                f"Nice to meet you, {name}. Request's with the admin now.\n\n"
+                "Heads-up: the admin sleeps a LOT 😴. If this is urgent, poke them "
+                "directly to hurry the approval along.",
+            )
+        await self._notify_admin_pending(user_id, ctx.get("username", ""), final_name, ctx.get("uni_email", ""))
 
     async def _verify_credentials(self, uni_email: str, uni_password: str) -> bool:
         try:
@@ -537,6 +635,7 @@ class BotApp:
             "/slots - browse what's bookable and point me at one\n"
             "/mytarget <sport> <day> <time> - set it manually, if you're fancy\n"
             "/mystart - unleash me, /mystop - put me back on the leash\n"
+            "/mybookings - see your bookings and cancel any\n"
             "/mystatus - what I'm currently obsessing over\n"
             "/help - this glorious wall of text"
         )
@@ -619,6 +718,5 @@ class BotApp:
         return (
             f"Status: {state}{extra}\n"
             f"Target: {target}\n"
-            f"Auto-booking: {running}\n"
-            f"Priority: {u.priority}{booked}"
+            f"Auto-booking: {running}{booked}"
         )

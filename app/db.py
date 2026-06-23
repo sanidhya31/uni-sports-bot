@@ -254,6 +254,13 @@ class UserStore:
         ).fetchone()
         return self._row_to_user(row) if row else None
 
+    def update_display_name(self, telegram_user_id: int, display_name: str) -> None:
+        self._conn.execute(
+            "UPDATE users SET display_name = ? WHERE telegram_user_id = ?",
+            (display_name, telegram_user_id),
+        )
+        self._conn.commit()
+
     def update_credentials(self, telegram_user_id: int, uni_username: str, uni_password: str) -> None:
         """Update creds without touching approval status (for re-verify)."""
         self._conn.execute(
