@@ -176,20 +176,20 @@ class UserRunner:
             raise _Booked()
 
         if result.permanent:
-            # The 24h rule (or already-booked). Retrying won't help *right now*, but
-            # we keep watching (slower) in case the window opens or the user cancels.
+            # The portal refused for a reason that won't clear by retrying right now.
+            # Keep watching (slower); the window may open or the user may cancel.
             self._blocked = True
             if not self._blocked_notified:
                 self._blocked_notified = True
-                portal_msg = f"\nPortal's exact words: “{result.message}”" if result.message else ""
+                line = f"{slot.course} {slot.day} {slot.time_range}"
+                reason = result.message or "the portal refused the booking."
                 await self._notify(
                     self.uid,
-                    f"😤 The portal swatted away {slot.course} {slot.day} {slot.time_range} - "
-                    f"classic 24-hour rule: you already hold something within 24h of this. "
-                    f"(Same-day is fine; booking in advance needs a 24h gap.){portal_msg}\n\n"
-                    f"I'll keep lurking - cancel the clashing booking and I'll pounce the second it lets me. "
-                    f"Or /mystop if you've made your peace.",
+                    f"⚠️ Couldn't book {line}.\nReason: {reason}\n\n"
+                    f"I'll keep checking and grab it the moment the portal allows. /mystop to stop.",
                 )
+                who = self.user.display_name or self.user.uni_username or str(self.uid)
+                await self._notify_admin(f"⚠️ {who} (id {self.uid}) couldn't book {line}.\nReason: {reason}")
             return  # keep watching, do NOT stop
         self._blocked = False
         log.info("Runner %s booking not confirmed (will retry): %s", self.uid, result.detail)

@@ -359,12 +359,7 @@ class BotApp:
         await self._db(self.store.set_enabled, user_id, enable)
         if enable:
             await self.user_api.send_message(
-                chat_id,
-                "▶️ I'm on it. The instant that slot cracks open, it's yours.\n\n"
-                "⚠️ Heads-up on the portal's 24-hour rule: if you already hold another "
-                "booking within 24h of this one, the portal will reject it (same-day is "
-                "fine; booking in advance needs a 24h gap). I'll still try and tell you if "
-                "it slaps me - no harm in attempting.",
+                chat_id, "▶️ On it. The instant that slot opens, it's yours.",
             )
         else:
             await self.user_api.send_message(chat_id, "⏸️ Fine, I'll stop. Back to refreshing the page yourself, I guess. 🥱")
