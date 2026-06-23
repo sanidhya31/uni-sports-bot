@@ -110,6 +110,17 @@ class UserRunner:
             self._standby_notified = False
             return
 
+        if slot.availability == Availability.BOOKED:
+            await self._db(self.store.mark_booked, self.uid)
+            await self._notify(
+                self.uid,
+                f"🎉 You already hold {slot.course} {slot.day} {slot.time_range}. "
+                f"Nothing for me to do here, clocking out.",
+            )
+            who = self.user.display_name or self.user.uni_username or str(self.uid)
+            await self._notify_admin(f"ℹ️ {who} (id {self.uid}) already holds {slot.course} {slot.day} {slot.time_range}.")
+            raise _Booked()
+
         if slot.availability != Availability.OPEN:
             self._standby_notified = False
             return

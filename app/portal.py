@@ -17,8 +17,9 @@ import logging
 from dataclasses import dataclass
 
 import httpx
+from bs4 import BeautifulSoup
 
-from app.slots import Slot, parse_schedule
+from app.slots import Availability, Slot, parse_schedule
 
 log = logging.getLogger(__name__)
 
@@ -132,22 +133,48 @@ class PortalClient:
 
     # -- booking ------------------------------------------------------------
     async def book(self, slot: Slot) -> BookingResult:
-        """Submit a slot's booking form. Caller must ensure it is OPEN."""
+        """Submit a slot's booking. Caller must ensure it is OPEN.
+
+        The portal uses a two-step flow: the first POST returns a confirmation
+        page with a ``<form id="ok">`` that JavaScript auto-submits; we must POST
+        that second form to actually commit. Success is then verified by
+        re-reading the schedule (the slot flips to BOOKED for this account),
+        which is far more reliable than matching page text.
+        """
         if not slot.form_action:
             return BookingResult(ok=False, detail="Slot has no booking form.")
         payload = dict(slot.fields)
         if slot.submit_name:
             payload[slot.submit_name] = slot.submit_value
+
         resp = await self._client.post(f"/{slot.form_action}", data=payload)
-        ok, permanent, detail, message = _interpret_booking(resp.text)
-        log.info(
-            "Booking POST %s -> HTTP %s ok=%s permanent=%s (%s)",
-            slot.form_action, resp.status_code, ok, permanent, detail,
-        )
+        final_text = resp.text
+        confirm = _parse_confirm_form(resp.text)
+        if confirm is not None:
+            action, fields = confirm
+            resp2 = await self._client.post(action, data=fields)
+            final_text = resp2.text
+
+        if await self._slot_now_booked(slot):
+            log.info("Booking confirmed: %s %s %s.", slot.course, slot.day, slot.start)
+            return BookingResult(ok=True, detail="confirmed booked", status_code=resp.status_code)
+
+        permanent, message = _failure_hint(final_text)
+        log.info("Booking not confirmed (permanent=%s): %s", permanent, message[:120])
         return BookingResult(
-            ok=ok, detail=detail, status_code=resp.status_code,
+            ok=False, detail="not confirmed", status_code=resp.status_code,
             permanent=permanent, message=message,
         )
+
+    async def _slot_now_booked(self, slot: Slot) -> bool:
+        """Re-read the schedule; True if this exact slot is now BOOKED for us."""
+        try:
+            for s in await self.list_slots():
+                if s.course == slot.course and s.day == slot.day and s.start == slot.start:
+                    return s.availability == Availability.BOOKED
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Post-book verification failed: %s", exc)
+        return False
 
     # -- helpers ------------------------------------------------------------
     @staticmethod
@@ -169,36 +196,35 @@ def _find_idkunde(html: str) -> str | None:
     return m.group(1) if m else None
 
 
-# Rejections that won't clear by retrying — the user must change something
-# (e.g. cancel a nearby booking). The portal's 24h lock (sperre24) lives here.
+# Phrases (in a booking-failure page) that mean retrying won't help right now,
+# e.g. the portal's 24-hour advance rule. Kept specific so they don't match the
+# unrelated ``sperre24`` hidden field that appears on every form.
 PERMANENT_MARKERS = (
-    "24 stunden", "24-stunden", "24h", "sperre", "innerhalb von 24",
-    "bereits gebucht", "schon gebucht", "bereits angemeldet",
+    "innerhalb von 24", "24 stunden", "bereits gebucht", "schon gebucht",
+    "bereits angemeldet",
 )
-SUCCESS_MARKERS = ("erfolgreich", "gebucht", "buchung wurde", "meine buchungen")
-FAILURE_MARKERS = ("fehlgeschlagen", "nicht gebucht", "nicht moeglich", "nicht möglich", "ausgebucht", "fehler")
 
 
-def _snippet(html: str) -> str:
+def _parse_confirm_form(html: str) -> tuple[str, dict[str, str]] | None:
+    """If the response is the auto-submit confirmation page, return its
+    (action, hidden fields); else None."""
+    if "id='ok'" not in html and 'id="ok"' not in html:
+        return None
+    form = BeautifulSoup(html, "html.parser").find("form", id="ok")
+    if form is None:
+        return None
+    action = (form.get("action") or "").strip()
+    if not action:
+        return None
+    fields = {i.get("name"): i.get("value", "") for i in form.find_all("input") if i.get("name")}
+    return action, fields
+
+
+def _failure_hint(html: str) -> tuple[bool, str]:
+    """Return (permanent, short_message) for a booking that didn't confirm."""
     import re
 
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:200]
-
-
-def _interpret_booking(html: str) -> tuple[bool, bool, str, str]:
-    """Return (ok, permanent, detail, message_snippet)."""
-    low = html.lower()
-    snippet = _snippet(html)
-    for marker in PERMANENT_MARKERS:
-        if marker in low:
-            return False, True, f"permanent rejection: {marker}", snippet
-    # Success can co-occur with the word "fehler" in unrelated page chrome, so
-    # check success before generic failure.
-    if any(m in low for m in SUCCESS_MARKERS) and not any(m in low for m in FAILURE_MARKERS):
-        return True, False, "success", snippet
-    for marker in FAILURE_MARKERS:
-        if marker in low:
-            return False, False, f"failure marker: {marker}", snippet
-    return False, False, "no clear success/failure marker", snippet
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+    low = text.lower()
+    permanent = any(m in low for m in PERMANENT_MARKERS)
+    return permanent, text[:200]
