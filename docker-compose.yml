@@ -5,7 +5,8 @@ services:
     env_file:
       - .env
     environment:
-      USER_DB_PATH: /app/users.db
+      USER_DB_PATH: /app/data/users.db
     volumes:
-      # Persist the encrypted user database across restarts.
-      - ./users.db:/app/users.db
+      # Persist the encrypted user database across restarts (directory mount
+      # avoids Docker creating a stray dir when the db file doesn't exist yet).
+      - ./data:/app/data
