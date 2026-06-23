@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     environment:
-      HEADLESS: "true"
-      RUNTIME_CONFIG_PATH: /app/config/config.json
+      USER_DB_PATH: /app/users.db
     volumes:
-      - ./config:/app/config
+      # Persist the encrypted user database across restarts.
+      - ./users.db:/app/users.db

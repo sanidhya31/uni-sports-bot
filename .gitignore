@@ -6,6 +6,17 @@ config.json
 config.json.tmp
 config/
 
+# Multi-user store + saved portal HTML (contain credentials / PII)
+*.db
+*.db-journal
+users.db*
+uniSPORT_Webpage.html
+uniSPORT_Webpage_files/
+
+# Unrelated personal data that happens to live in this folder
+outputs/
+*.rar
+
 # IDEs and local environments
 .idea/
 .venv/

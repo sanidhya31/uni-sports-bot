@@ -1,6 +1,9 @@
 apprise==1.10.0
+beautifulsoup4==4.15.0
 certifi==2026.5.20
 charset-normalizer==3.4.7
+cryptography==49.0.0
+httpx==0.28.1
 click==8.4.0
 colorama==0.4.6
 greenlet==3.5.1

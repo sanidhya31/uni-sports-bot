@@ -1,244 +1,133 @@
-# Uni Trier Sports Bot
+# Uni Trier Sports Bot — Multi-User
 
-You decide to play badminton. Very wholesome. Apparently everyone else on campus has the same spiritual awakening at the exact same time, so the slot is full before you even finish pretending this was a casual plan.
+You decide to play badminton. Very wholesome. Apparently everyone else on campus
+has the same spiritual awakening at the exact same time, so the slot is full
+before you finish pretending this was a casual plan.
 
-Then you join the waiting list. Maybe an email arrives saying a slot opened. Maybe it arrives late. Maybe by the time you click through, someone else has already been blessed by the booking gods. Luck is still not in anyone's hands, but increasing the probability of being the lucky one is exactly what this bot is here for.
+This bot logs into the Uni Trier uniSPORT portal, watches a chosen
+sport/day/time, and books it the instant the real `Buchen` form appears — now
+for **many users at once**, each from their own account, coordinated by priority
+so your own accounts never fight over a single seat.
 
-This bot logs into the Uni Trier sports portal, loads the course schedule, watches one configured sport/day/time, and books it when the real `Buchen` form appears.
+## What's new in the multi-user version
 
-It also has Telegram control, 
-(for the geeks) because opening a VPS just to change `Badminton Donnerstag 14:00` to `Badminton Dienstag 12:00` is the kind of tiny inconvenience that somehow becomes your entire evening.
+- **Many accounts in parallel** — each user is a lightweight HTTP session
+  (`httpx`), not a browser. A small VPS handles many users.
+- **Pure HTTP, no Playwright** — login, schedule, and booking are plain form
+  POSTs. Fast (milliseconds per booking) and cheap on RAM.
+- **Admin approval** — users `/register` on the public bot; you approve on a
+  separate **admin bot** with one tap.
+- **Encrypted credentials** — uni passwords are stored Fernet-encrypted at rest.
+- **Credential check at signup** — registration verifies the login before
+  storing, so users get instant ✅/❌ feedback.
+- **Priority "strike"** — when a slot opens with N free seats, only the top-N
+  users by priority book; the rest stand by and cascade in if a seat is left.
+- **Queue + hold** — a concurrency cap queues extra users; the admin can
+  hold/release anyone if the VPS is loaded.
 
-## What It Does
-
-- Logs into the Uni Trier uniSPORT account page.
-- Opens the KURSE schedule directly with the portal POST state.
-- Finds the target course card by sport, weekday, and time.
-- Reports whether the slot is open, full, or on `Warteliste`.
-- Submits the actual booking form when `DRY_RUN=false`.
-- Lets you control target, pause/resume, dry-run, interval, and status from Telegram.
-- Runs locally or on a VPS with Docker Compose.
-
-## How It Flows
-
-```mermaid
-flowchart LR
-    A["Telegram command"] --> B["Runtime config"]
-    B --> C["Sports monitor"]
-    C --> D["Login session"]
-    D --> E["KURSE schedule POST"]
-    E --> F["Find sport + day + time"]
-    F --> G{"Button state"}
-    G -->|"Warteliste / full"| H["Report not open"]
-    G -->|"Buchen"| I{"Dry run?"}
-    I -->|"on"| J["Report open only"]
-    I -->|"off"| K["Submit booking form"]
-    K --> L["Telegram confirmation"]
-```
+## Architecture
 
 ```mermaid
-sequenceDiagram
-    participant You as You on Telegram
-    participant Bot as Control Bot
-    participant Monitor as Booking Monitor
-    participant Portal as Uni Trier Portal
-
-    You->>Bot: /target Badminton Donnerstag 14:00
-    Bot->>Monitor: update config.json
-    You->>Bot: /startbot
-    Monitor->>Portal: load KURSE schedule
-    Portal-->>Monitor: course cards + forms
-    Monitor->>Monitor: match Badminton (Do), 14:00
-    Monitor-->>You: open / full / booked
+flowchart TB
+    UB["User bot<br/>/register /slots /mystart"] --> APP
+    AB["Admin bot<br/>approve /users /hold"] --> APP
+    APP["app.app<br/>(bots + engine, shared SQLite thread)"]
+    APP --> DB[("users.db<br/>encrypted creds, targets, priority")]
+    APP --> ENG["Engine"]
+    ENG --> R1["httpx runner · User A"] --> P
+    ENG --> R2["httpx runner · User B"] --> P
+    P["uniSPORT portal<br/>login · schedule · book (POSTs)"]
 ```
 
-## Current Booking Logic
-
-The portal exposes booking through forms such as:
-
-```html
-<form method="POST" target="frame" action="kurstermin_sst_buchen.php">
-  <input name="sub" value="Buchen" type="submit">
-  <input name="kurs_id" value="15701494" type="hidden">
-  <input name="mitglied_id" value="13381" type="hidden">
-  <input name="idkunde" value="13381" type="hidden">
-  <input name="spring" value="3" type="hidden">
-  <input name="id_kurs" value="2009" type="hidden">
-  <input name="mobile" value="0" type="hidden">
-  <input name="sperre24" value="0" type="hidden">
-</form>
-```
-
-The bot checks for that exact `kurstermin_sst_buchen.php` form and `Buchen` submit button. If the target card only has `warteliste_buchen.php` or `Warteliste`, it does not book.
+| Module | Role |
+|---|---|
+| `app/slots.py` | Parse schedule HTML → `Slot` objects (availability, time, Rest, fields) |
+| `app/portal.py` | Per-user `httpx` client: `login`, `list_slots`, `book` |
+| `app/db.py` | Encrypted SQLite user store (status, target, priority) |
+| `app/bot.py` | Two Telegram bots: user commands + admin approval/management |
+| `app/engine.py` | One runner per active user; priority-strike coordination |
+| `app/app.py` | Runs bots + engine together |
 
 ## Setup
 
 ```powershell
 cd D:\Projects\uni-sports-bot
-uv sync
-uv run playwright install chromium
+python -m venv venv
+.\venv\Scripts\pip install -r requirements.txt
 ```
 
-Create `.env` from `.env.example` and fill in:
+1. **Create two bots** in [@BotFather](https://t.me/BotFather): a public user bot
+   and a private admin bot. Send `/start` to your admin bot so it can message you.
+2. **Generate the encryption key:**
+   ```powershell
+   .\venv\Scripts\python -m app.db genkey
+   ```
+3. Copy `.env.example` → `.env` and fill in `TELEGRAM_BOT_TOKEN`,
+   `ADMIN_BOT_TOKEN`, `ADMIN_USER_ID`, and `USER_DB_KEY`.
 
-```env
-LOGIN_URL=https://ahs.uni-trier.de/login_neu.php
-TARGET_URL=https://ahs.uni-trier.de/index_account.php
-
-UNI_USERNAME=your-email
-PASSWORD=your-password
-
-SPORT=Badminton
-DAY=Donnerstag
-TIME_SLOT=14:00
-
-DRY_RUN=true
-POLL_INTERVAL_SECONDS=3
-POLL_JITTER_SECONDS=0
-```
-
-Keep `DRY_RUN=true` until `/check` and the logs clearly point to the correct slot.
-
-## Run Locally
+## Run
 
 ```powershell
-uv run python -m app.main
+.\venv\Scripts\python -m app.app
 ```
 
-The app starts the Telegram listener and the monitor loop. By default runtime config starts paused, so use Telegram to resume checks:
+This starts both bots and the booking engine.
 
+## Commands
+
+**User bot:**
 ```text
-/startbot
+/register <uni_email> <password>      request access (verified + admin-approved)
+/slots                                browse live slots, pick day → slot
+/mytarget Badminton Donnerstag 14:00  set target manually
+/mystart                              start auto-booking your target
+/mystop                               stop
+/mystatus                             your status and target
 ```
 
-## Telegram Control
-
-Set these in `.env`:
-
-```env
-TELEGRAM_BOT_TOKEN=your_botfather_token
-TELEGRAM_ALLOWED_USER_ID=your_numeric_telegram_user_id
-```
-
-Then open the bot in Telegram and send:
-
+**Admin bot:**
 ```text
-/start
+/pending                       list access requests
+/approve <id> / /reject <id>   (also inline buttons on each request)
+/users                         list everyone with status/target/priority
+/hold <id> / /release <id>     park / un-park a user
+/priority <id> <n>             lower number = books first
+/kick <id>                     remove a user
 ```
 
-The bot registers its command menu automatically, so typing `/` in Telegram shows available commands.
+## How booking works
 
-### Commands
+A course card exposes a booking form. The bot books only the real open form
+(`kurstermin_sst_buchen.php`, button `Buchen`) and never the waitlist
+(`warteliste_buchen.php`). Each user's own session supplies their own
+`idkunde`/`mitglied_id`, so parallel accounts don't collide. When a slot opens
+with `Rest: N`, the top-N active users (by priority) for that exact slot book
+simultaneously; lower-priority users stand by and step in only if a seat remains.
 
-```text
-/status
-```
+## Deploy (VPS)
 
-Shows current target, pause state, dry-run mode, and polling interval.
-
-```text
-/check
-```
-
-Loads the portal once and reports current availability for the configured target.
-
-```text
-/target Badminton Donnerstag 14:00
-```
-
-Sets sport, day, and time in one command.
-
-```text
-/set sport Badminton
-/set day Donnerstag
-/set time 14:00
-```
-
-Changes one target field at a time.
-
-```text
-/startbot
-/stopbot
-```
-
-Starts or pauses continuous checking. Paused means the Python process is still alive and Telegram still works, but booking checks are not running.
-
-```text
-/dryrun on
-/dryrun off
-```
-
-`on` means detect and report only. `off` allows real booking submission.
-
-```text
-/interval 3
-```
-
-Checks every 3 seconds. Lower is more aggressive; also more annoying to the portal, so use judgment.
-
-## Can Telegram Start A Stopped App?
-
-No. Telegram can only talk to code that is already running. The sane setup is:
-
-- Keep the app/container running on the VPS.
-- Keep booking checks paused with `/stopbot` when you do not need them.
-- Use `/startbot` when you want the bot to actively monitor.
-
-If the VPS process or Docker container is stopped, Telegram cannot magically resurrect it. That would require a separate always-on supervisor, and at that point we have invented a tiny operations department. No thanks.
-
-## Docker
-
-Build and run:
-
-```powershell
+```bash
 docker compose up -d --build
 docker compose logs -f sports-bot
 ```
 
-Docker Compose mounts:
+The image is browser-free (pure HTTP), so it's small. `users.db` is mounted to
+persist registrations. `restart: unless-stopped` brings it back after reboots.
 
-```text
-./config      -> runtime Telegram-controlled config
+> Only one process may poll a given bot token at a time. If you see HTTP **409
+> Conflict**, another instance (old VPS container, a second terminal) is still
+> running the same bot — stop it.
+
+## Tests
+
+```powershell
+.\venv\Scripts\python -m scripts.phase0_proof       # live: login + list slots
+.\venv\Scripts\python -m scripts.test_engine_logic  # offline: priority strike
 ```
 
-For a VPS, set:
+## Safety notes
 
-```env
-HEADLESS=true
-```
-
-The container uses `restart: unless-stopped`, so it comes back after reboots unless you explicitly stop it.
-
-## Safety Notes
-
-- Keep `DRY_RUN=true` while testing.
-- Use `/check` before `/dryrun off`.
-- Do not commit `.env` or `config.json`.
-- If you accidentally paste your Telegram token somewhere public, rotate it in BotFather.
-- This bot automates your own portal session. Use it responsibly and do not hammer the service.
-
-## Status Examples
-
-Open slot:
-
-```text
-Badminton (Do)
-Day: Donnerstag, 28.05.
-Time: 14:00 - 15:30 Uhr
-Status: open
-Button: Buchen
-Action: kurstermin_sst_buchen.php
-Rest: 13
-```
-
-Full slot:
-
-```text
-Badminton (Di)
-Day: Dienstag, 26.05.
-Time: 12:00 - 13:30 Uhr
-Status: not open
-Button: Warteliste
-Action: warteliste_buchen.php
-Rest: 0
-```
+- Don't commit `.env`, `users.db`, or saved portal HTML (all gitignored).
+- The bot automates each user's own portal session — use responsibly and keep
+  the polling interval reasonable.
+- If a bot token leaks, rotate it in BotFather.

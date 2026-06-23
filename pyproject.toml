@@ -1,10 +1,13 @@
 [project]
 name = "uni-sports-bot"
 version = "0.1.0"
-description = "Playwright polling bot for Uni Trier sports slot availability"
+description = "Multi-user HTTP booking bot for Uni Trier uniSPORT slots"
 requires-python = ">=3.11"
 dependencies = [
     "apprise==1.10.0",
+    "beautifulsoup4==4.15.0",
+    "cryptography==49.0.0",
+    "httpx==0.28.1",
     "playwright==1.60.0",
     "python-dotenv==1.2.2",
 ]
