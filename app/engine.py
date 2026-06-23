@@ -22,6 +22,7 @@ from app.db import User, UserStore
 from app.portal import PortalClient
 from app.settings import Settings
 from app.slots import Availability, Slot, _day_key, _norm
+from app.translate import to_english
 
 log = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ class UserRunner:
             if not self._blocked_notified:
                 self._blocked_notified = True
                 line = f"{slot.course} {slot.day} {slot.time_range}"
-                reason = result.message or "the portal refused the booking."
+                reason = (await to_english(result.message)) or "the portal refused the booking."
                 await self._notify(
                     self.uid,
                     f"⚠️ Couldn't book {line}.\nReason: {reason}\n\n"
